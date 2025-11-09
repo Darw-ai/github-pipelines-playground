@@ -360,10 +360,10 @@ jobs:
             --base main \
             --head "$BRANCH_NAME" \
             --title "feat: AI-Generated Project Scaffold - $PROJECT_NAME" \
-            --body "$(cat <<'EOF'
+            --body "$(cat <<EOF
 ## 🤖 AI-Generated Project Scaffold
 
-**Project Name:** \`$PROJECT_NAME\`
+**Project Name:** $PROJECT_NAME
 **Tracking Issue:** #$ISSUE_NUMBER
 
 ---
