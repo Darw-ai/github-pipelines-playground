@@ -285,10 +285,20 @@ jobs:
 
       - name: Debug - List downloaded artifacts
         run: |
-          echo "=== Contents of generated directory ==="
-          ls -laR generated || echo "generated directory not found"
-          echo "=== Total files found ==="
+          echo "=== Current directory contents ==="
+          ls -la
+          echo ""
+          echo "=== All files in current directory (recursive) ==="
+          find . -type f -name "*.ts" -o -name "*.json" -o -name "*.js" -o -name "*.md" || true
+          echo ""
+          echo "=== Contents of generated directory (if exists) ==="
+          ls -laR generated 2>/dev/null || echo "generated directory not found"
+          echo ""
+          echo "=== Total files found in generated/ ==="
           find generated -type f 2>/dev/null | wc -l || echo "0"
+          echo ""
+          echo "=== Searching for ANY generated files ==="
+          find . -type f -path "*/generated/*" 2>/dev/null || echo "No files in generated paths found"
 
       - name: Move generated files to root
         run: |
