@@ -232,7 +232,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: generated-file-${{ strategy.job-index }}
-          path: generated/${{ matrix.file.path }}
+          path: generated
           retention-days: 7
 
       - name: Comment progress on issue
@@ -264,7 +264,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: generated-file-*
-          path: generated-files
+          path: .
           merge-multiple: true
 
       - name: Download plan artifact
@@ -285,21 +285,26 @@ jobs:
 
       - name: Debug - List downloaded artifacts
         run: |
-          echo "=== Contents of generated-files directory ==="
-          ls -laR generated-files || echo "generated-files directory not found"
+          echo "=== Contents of generated directory ==="
+          ls -laR generated || echo "generated directory not found"
           echo "=== Total files found ==="
-          find generated-files -type f | wc -l || echo "No files found"
+          find generated -type f 2>/dev/null | wc -l || echo "0"
 
       - name: Move generated files to root
         run: |
           # Check if directory exists and has files
-          if [ -d "generated-files" ] && [ "$(find generated-files -type f | wc -l)" -gt 0 ]; then
-            echo "Moving $(find generated-files -type f | wc -l) files..."
-            # Move all files from artifacts to root, preserving directory structure
-            find generated-files -type f -exec sh -c 'mkdir -p "$(dirname "{}")" && mv "{}" "$(echo "{}" | sed "s|generated-files/||")"' \;
-            rm -rf generated-files
+          if [ -d "generated" ] && [ "$(find generated -type f 2>/dev/null | wc -l)" -gt 0 ]; then
+            echo "Moving $(find generated -type f | wc -l) files..."
+            # Move all files from generated/ to root, preserving directory structure
+            find generated -type f -exec sh -c '
+              TARGET="${1#generated/}"
+              mkdir -p "$(dirname "$TARGET")"
+              mv "$1" "$TARGET"
+            ' sh {} \;
+            rm -rf generated
+            echo "✅ Files moved successfully"
           else
-            echo "⚠️  No files found in generated-files directory"
+            echo "⚠️  No files found in generated directory"
             exit 1
           fi
 
