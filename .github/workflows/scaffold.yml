@@ -111,9 +111,12 @@ jobs:
           cd .sdlc-platform/scripts
           node ai-generate-plan.js
 
+          # Copy plan.json to repo root for artifact upload and later steps
+          cp plan.json ../../plan.json
+
           # Read outputs
-          PLAN=$(cat ../plan.json | jq -c '.files')
-          DEPS=$(cat ../plan.json | jq -c '.dependencies')
+          PLAN=$(cat plan.json | jq -c '.files')
+          DEPS=$(cat plan.json | jq -c '.dependencies')
 
           # Set outputs for next job
           echo "plan=${PLAN}" >> $GITHUB_OUTPUT
@@ -201,8 +204,8 @@ jobs:
           node ai-generate-file.js
 
           # Create directory structure if needed
-          mkdir -p "../generated/$(dirname "$FILE_PATH")"
-          mv ../generated-file.txt "../generated/$FILE_PATH"
+          mkdir -p "../../generated/$(dirname "$FILE_PATH")"
+          mv generated-file.txt "../../generated/$FILE_PATH"
 
       - name: Upload generated file
         uses: actions/upload-artifact@v4
