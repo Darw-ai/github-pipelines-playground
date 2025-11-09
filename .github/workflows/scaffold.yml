@@ -335,7 +335,16 @@ jobs:
       - name: Push scaffold branch
         run: |
           BRANCH_NAME="ai-scaffold/${{ github.event.inputs.repo_name }}"
-          git push origin "$BRANCH_NAME"
+          echo "Pushing branch: $BRANCH_NAME"
+          git push -u origin "$BRANCH_NAME"
+
+          # Verify the push succeeded
+          if git ls-remote --exit-code --heads origin "$BRANCH_NAME"; then
+            echo "✅ Branch successfully pushed to remote"
+          else
+            echo "❌ ERROR: Branch push failed or branch not found on remote"
+            exit 1
+          fi
 
       - name: Create Pull Request
         id: create-pr
