@@ -1,0 +1,514 @@
+name: AI-Powered SDLC Loop
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      task_issue_number:
+        description: 'GitHub Issue number for status tracking'
+        required: false
+        type: string
+      branch:
+        description: 'Branch to deploy (defaults to current branch)'
+        required: false
+        type: string
+        default: 'main'
+
+# Prevent concurrent SDLC runs on the same branch
+concurrency:
+  group: sdlc-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write           # Push fix branches
+  pull-requests: write      # Create fix PRs
+  issues: write             # Update tracking issues
+  id-token: write           # OIDC for cloud access
+  actions: read             # Read workflow status
+
+env:
+  # These can be overridden via repository settings
+  DEPLOY_TIMEOUT_MINUTES: 15
+  TEST_TIMEOUT_MINUTES: 10
+
+jobs:
+  # ========================================================
+  # JOB 1: DEPLOY
+  # Replaces: AWS ECS Deployer Container
+  # ========================================================
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    outputs:
+      deployment_status: ${{ steps.run-deploy.outcome }}
+      deployment_outputs: ${{ steps.extract-outputs.outputs.json }}
+      deployment_log_artifact: deployment-logs
+      stack_name: ${{ steps.run-deploy.outputs.stack_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Update tracking issue - Deploy started
+        if: github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '🚀 **Deployment Initiated**\n\n' +
+                    '**Branch:** `${{ github.ref_name }}`\n' +
+                    '**Commit:** `${{ github.sha }}`\n' +
+                    '**Started:** ' + new Date().toISOString() + '\n\n' +
+                    '*Detecting IaC type...*'
+            });
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install AWS SAM CLI
+        run: |
+          pip install aws-sam-cli
+
+      - name: Install AWS CDK CLI
+        run: |
+          npm install -g aws-cdk
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.7.5'
+
+      - name: Install Serverless Framework
+        run: |
+          npm install -g serverless@3
+
+      # OIDC Authentication for AWS (no static credentials!)
+      - name: Configure AWS Credentials (OIDC)
+        if: secrets.AWS_OIDC_ROLE_ARN
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-session-name: GitHubActions-SDLC-${{ github.run_id }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Detect IaC type
+        id: detect-iac
+        run: |
+          chmod +x scripts/detect-iac.sh
+          IAC_TYPE=$(scripts/detect-iac.sh)
+          echo "iac_type=${IAC_TYPE}" >> $GITHUB_OUTPUT
+          echo "✅ Detected IaC type: ${IAC_TYPE}"
+
+      - name: Run deployment
+        id: run-deploy
+        env:
+          IAC_TYPE: ${{ steps.detect-iac.outputs.iac_type }}
+          STACK_NAME: sdlc-${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+        run: |
+          chmod +x scripts/run-deployment.sh
+
+          # Capture all output to log file
+          scripts/run-deployment.sh 2>&1 | tee deployment.log
+
+          # Check exit status
+          if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "✅ Deployment succeeded"
+            echo "stack_name=${STACK_NAME}" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Deployment failed"
+            exit 1
+          fi
+
+      - name: Extract deployment outputs
+        id: extract-outputs
+        if: success()
+        env:
+          IAC_TYPE: ${{ steps.detect-iac.outputs.iac_type }}
+          STACK_NAME: ${{ steps.run-deploy.outputs.stack_name }}
+        run: |
+          chmod +x scripts/extract-outputs.sh
+          scripts/extract-outputs.sh "${IAC_TYPE}" "${STACK_NAME}" > outputs.json
+
+          # Output as JSON string for next job
+          OUTPUTS_JSON=$(cat outputs.json | jq -c '.')
+          echo "json=${OUTPUTS_JSON}" >> $GITHUB_OUTPUT
+
+          echo "📦 Deployment Outputs:"
+          cat outputs.json | jq '.'
+
+      - name: Upload deployment logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-logs
+          path: |
+            deployment.log
+            outputs.json
+          retention-days: 30
+
+      - name: Update tracking issue - Deploy success
+        if: success() && github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outputs = require('./outputs.json');
+            const outputsStr = JSON.stringify(outputs, null, 2);
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '✅ **Deployment Successful**\n\n' +
+                    '**IaC Type:** `${{ steps.detect-iac.outputs.iac_type }}`\n' +
+                    '**Stack:** `${{ steps.run-deploy.outputs.stack_name }}`\n\n' +
+                    '**Outputs:**\n```json\n' + outputsStr + '\n```\n\n' +
+                    '*Next: Running sanity tests...*'
+            });
+
+      - name: Update tracking issue - Deploy failure
+        if: failure() && github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '❌ **Deployment Failed**\n\n' +
+                    'See logs: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n' +
+                    '*AI fix will be attempted...*'
+            });
+
+  # ========================================================
+  # JOB 2: TEST
+  # Replaces: AWS ECS Sanity Tester Container
+  # ========================================================
+  test:
+    needs: deploy
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    outputs:
+      test_status: ${{ steps.run-tests.outcome }}
+      test_log_artifact: test-logs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/package.json
+
+      - name: Install script dependencies
+        run: |
+          cd scripts
+          npm install
+
+      - name: Download deployment outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-logs
+          path: .
+
+      - name: Update tracking issue - Test started
+        if: github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '🧪 **Sanity Tests Initiated**\n\n' +
+                    '*Generating test plan via AI...*'
+            });
+
+      - name: Generate sanity tests via AI
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL || 'bedrock/amazon.nova-pro-v1:0' }}
+          AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
+        run: |
+          cd scripts
+          node ai-generate-tests.js
+
+          echo "📋 Generated Test Plan:"
+          cat ../sanity-tests.json | jq '.'
+
+      - name: Execute sanity tests
+        id: run-tests
+        run: |
+          cd scripts
+          node execute-tests.js 2>&1 | tee ../test-results.log
+
+          # Preserve exit code
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            echo "✅ All tests passed"
+          else
+            echo "❌ Tests failed"
+            exit 1
+          fi
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            test-results.log
+            sanity-tests.json
+          retention-days: 30
+
+      - name: Update tracking issue - Test success
+        if: success() && github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const testLog = require('fs').readFileSync('test-results.log', 'utf-8');
+            const passedTests = (testLog.match(/✅/g) || []).length;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '✅ **All Sanity Tests Passed**\n\n' +
+                    '**Tests Executed:** ' + passedTests + '\n\n' +
+                    '```\n' + testLog.substring(0, 1000) + '\n```\n\n' +
+                    '🎉 **SDLC Cycle Complete!**'
+            });
+
+            // Close issue on success
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              state: 'closed',
+              labels: ['completed', 'sdlc']
+            });
+
+      - name: Update tracking issue - Test failure
+        if: failure() && github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '❌ **Sanity Tests Failed**\n\n' +
+                    'See logs: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n' +
+                    '*AI fix will be attempted...*'
+            });
+
+  # ========================================================
+  # JOB 3: FIX
+  # Replaces: AWS ECS Fixer Container
+  # Only runs if deploy or test fails
+  # ========================================================
+  fix:
+    needs: [deploy, test]
+    if: always() && (needs.deploy.result == 'failure' || needs.test.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for branching
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/package.json
+
+      - name: Install script dependencies
+        run: |
+          cd scripts
+          npm install
+
+      - name: Download failure logs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-logs'
+          path: logs
+          merge-multiple: true
+
+      - name: Update tracking issue - Fix started
+        if: github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '🔧 **AI Fix Initiated**\n\n' +
+                    '*Analyzing failure and generating fix...*'
+            });
+
+      - name: Generate fix via AI
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL || 'bedrock/amazon.nova-pro-v1:0' }}
+          AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
+          FAILURE_STAGE: ${{ needs.deploy.result == 'failure' && 'deploy' || 'test' }}
+        run: |
+          cd scripts
+          node ai-generate-fix.js
+
+          echo "📝 Generated Fix:"
+          cat ../fix.patch | head -50
+
+      - name: Setup Git
+        run: |
+          git config user.name "AI Fixer"
+          git config user.email "ai-fixer@github-actions"
+
+      - name: Apply fix and create branch
+        id: apply-fix
+        run: |
+          # Apply the patch
+          if git apply --check fix.patch 2>/dev/null; then
+            git apply fix.patch
+          else
+            echo "⚠️ Patch doesn't apply cleanly, attempting to apply with --reject"
+            git apply --reject fix.patch || true
+          fi
+
+          # Create fix branch
+          FIX_BRANCH="ai-fix/run-${{ github.run_id }}"
+          git checkout -b "$FIX_BRANCH"
+
+          # Commit changes
+          git add -A
+          git commit -m "fix: AI-generated fix for SDLC failure
+
+Failure stage: ${{ needs.deploy.result == 'failure' && 'deployment' || 'test' }}
+Original run: ${{ github.run_id }}
+Issue: #${{ github.event.inputs.task_issue_number }}
+
+This fix was automatically generated by AI based on the error logs.
+"
+
+          # Push branch
+          git push origin "$FIX_BRANCH"
+
+          echo "fix_branch=${FIX_BRANCH}" >> $GITHUB_OUTPUT
+
+      - name: Create Fix Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.apply-fix.outputs.fix_branch }}
+          base: ${{ github.ref_name }}
+          title: "fix: AI attempt to fix SDLC failure (run ${{ github.run_id }})"
+          body: |
+            ## 🔧 AI-Generated Fix
+
+            **Original Failure:** ${{ needs.deploy.result == 'failure' && 'Deployment' || 'Test' }}
+            **Tracking Issue:** #${{ github.event.inputs.task_issue_number }}
+            **Original Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            ---
+
+            ### 📋 Failure Analysis
+
+            This PR contains an AI-generated fix for the SDLC cycle failure.
+
+            **⚠️ Important:** This is an automated fix. Please:
+            - [ ] Review the changes carefully
+            - [ ] Test locally if possible
+            - [ ] Verify the fix addresses the root cause
+            - [ ] Check for any unintended side effects
+
+            ---
+
+            ### 🔄 Next Steps
+
+            Merging this PR will trigger a new SDLC cycle to validate the fix.
+
+            If the fix is incorrect, close this PR and investigate manually.
+
+            ---
+
+            *Generated at: ${{ github.run_id }} | Workflow: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+          labels: |
+            ai-generated
+            fix
+            needs-review
+
+      - name: Update tracking issue - Fix PR created
+        if: success() && github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '🔧 **AI Fix Generated**\n\n' +
+                    '**Pull Request:** #${{ steps.create-pr.outputs.pull-request-number }}\n' +
+                    '**Review:** ${{ steps.create-pr.outputs.pull-request-url }}\n\n' +
+                    '**Next Steps:**\n' +
+                    '1. Review the AI-generated fix\n' +
+                    '2. Test if needed\n' +
+                    '3. Merge to trigger new SDLC cycle\n\n' +
+                    '*This issue will remain open pending fix validation.*'
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              labels: ['fix-pending']
+            });
+
+      - name: Update tracking issue - Fix failed
+        if: failure() && github.event.inputs.task_issue_number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '❌ **AI Fix Generation Failed**\n\n' +
+                    'Could not generate or apply an automated fix.\n\n' +
+                    '**Manual intervention required.**\n\n' +
+                    'Logs: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})'
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              labels: ['manual-fix-required']
+            });
