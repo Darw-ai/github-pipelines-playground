@@ -266,11 +266,25 @@ jobs:
           BRANCH_NAME="ai-scaffold/${{ github.event.inputs.repo_name }}"
           git checkout -b "$BRANCH_NAME"
 
+      - name: Debug - List downloaded artifacts
+        run: |
+          echo "=== Contents of generated-files directory ==="
+          ls -laR generated-files || echo "generated-files directory not found"
+          echo "=== Total files found ==="
+          find generated-files -type f | wc -l || echo "No files found"
+
       - name: Move generated files to root
         run: |
-          # Move all files from artifacts to root
-          find generated-files -type f -exec sh -c 'mkdir -p "$(dirname "{}")" && mv "{}" "$(echo "{}" | sed "s|generated-files/||")"' \;
-          rm -rf generated-files
+          # Check if directory exists and has files
+          if [ -d "generated-files" ] && [ "$(find generated-files -type f | wc -l)" -gt 0 ]; then
+            echo "Moving $(find generated-files -type f | wc -l) files..."
+            # Move all files from artifacts to root, preserving directory structure
+            find generated-files -type f -exec sh -c 'mkdir -p "$(dirname "{}")" && mv "{}" "$(echo "{}" | sed "s|generated-files/||")"' \;
+            rm -rf generated-files
+          else
+            echo "⚠️  No files found in generated-files directory"
+            exit 1
+          fi
 
       - name: Create dependencies file (if applicable)
         run: |
