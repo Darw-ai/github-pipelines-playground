@@ -207,9 +207,26 @@ jobs:
           cd .sdlc-platform/scripts
           node ai-generate-file.js
 
+          # Debug: Check if file was created
+          echo "=== Checking for generated-file.txt ==="
+          ls -la generated-file.txt || echo "ERROR: generated-file.txt not found!"
+
+          # Debug: Show where we are
+          echo "=== Current directory ==="
+          pwd
+
           # Create directory structure if needed
-          mkdir -p "../../generated/$(dirname "$FILE_PATH")"
+          TARGET_DIR="../../generated/$(dirname "$FILE_PATH")"
+          echo "=== Creating directory: $TARGET_DIR ==="
+          mkdir -p "$TARGET_DIR"
+
+          # Move file
+          echo "=== Moving file to: ../../generated/$FILE_PATH ==="
           mv generated-file.txt "../../generated/$FILE_PATH"
+
+          # Verify the file was moved
+          echo "=== Verifying file exists at destination ==="
+          ls -la "../../generated/$FILE_PATH" || echo "ERROR: File not found at destination!"
 
       - name: Upload generated file
         uses: actions/upload-artifact@v4
