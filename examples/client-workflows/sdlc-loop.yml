@@ -1,0 +1,49 @@
+# Client Wrapper for AI-Powered SDLC Loop
+#
+# Place this file in your client repository at:
+# .github/workflows/sdlc-loop.yml
+#
+# This workflow calls the centralized reusable workflow from the SDLC platform
+
+name: SDLC Deploy-Test-Fix
+
+on:
+  # Trigger on pushes to main/develop
+  push:
+    branches:
+      - main
+      - develop
+
+  # Allow manual triggers
+  workflow_dispatch:
+    inputs:
+      task_issue_number:
+        description: 'GitHub Issue number for status tracking'
+        required: false
+        type: string
+      branch:
+        description: 'Branch to deploy'
+        required: false
+        type: string
+        default: 'main'
+
+jobs:
+  sdlc:
+    # Call the centralized reusable workflow
+    uses: Darw-ai/github-pipelines-playground/.github/workflows/sdlc-loop.yml@main
+    with:
+      task_issue_number: ${{ inputs.task_issue_number }}
+      branch: ${{ inputs.branch }}
+    secrets:
+      # Pass all required secrets from your repository secrets
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_MODEL: ${{ secrets.AI_MODEL }}
+      AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
+      AWS_OIDC_ROLE_ARN: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read

@@ -1,6 +1,36 @@
 name: AI-Powered SDLC Loop
 
 on:
+  # Allow this workflow to be called from other repositories
+  workflow_call:
+    inputs:
+      task_issue_number:
+        description: 'GitHub Issue number for status tracking'
+        required: false
+        type: string
+      branch:
+        description: 'Branch to deploy (defaults to current branch)'
+        required: false
+        type: string
+        default: 'main'
+    secrets:
+      AI_API_KEY:
+        description: 'API key for AI provider (OpenAI, Anthropic, etc.)'
+        required: false
+      AI_MODEL:
+        description: 'AI model identifier (e.g., anthropic/claude-3-5-sonnet-20241022)'
+        required: false
+      AI_ENDPOINT:
+        description: 'Custom AI endpoint URL'
+        required: false
+      AWS_OIDC_ROLE_ARN:
+        description: 'AWS IAM role ARN for OIDC authentication'
+        required: false
+      AWS_REGION:
+        description: 'AWS region for deployments'
+        required: false
+
+  # Keep triggers for testing in this repo
   push:
     branches:
       - main
@@ -54,6 +84,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Checkout SDLC platform scripts
+        uses: actions/checkout@v4
+        with:
+          repository: Darw-ai/github-pipelines-playground
+          path: .sdlc-platform
+          sparse-checkout: |
+            scripts
 
       - name: Update tracking issue - Deploy started
         if: github.event.inputs.task_issue_number
@@ -110,8 +148,8 @@ jobs:
       - name: Detect IaC type
         id: detect-iac
         run: |
-          chmod +x scripts/detect-iac.sh
-          IAC_TYPE=$(scripts/detect-iac.sh)
+          chmod +x .sdlc-platform/scripts/detect-iac.sh
+          IAC_TYPE=$(.sdlc-platform/scripts/detect-iac.sh)
           echo "iac_type=${IAC_TYPE}" >> $GITHUB_OUTPUT
           echo "✅ Detected IaC type: ${IAC_TYPE}"
 
@@ -122,10 +160,10 @@ jobs:
           STACK_NAME: sdlc-${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}
           AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
         run: |
-          chmod +x scripts/run-deployment.sh
+          chmod +x .sdlc-platform/scripts/run-deployment.sh
 
           # Capture all output to log file
-          scripts/run-deployment.sh 2>&1 | tee deployment.log
+          .sdlc-platform/scripts/run-deployment.sh 2>&1 | tee deployment.log
 
           # Check exit status
           if [ ${PIPESTATUS[0]} -eq 0 ]; then
@@ -143,8 +181,8 @@ jobs:
           IAC_TYPE: ${{ steps.detect-iac.outputs.iac_type }}
           STACK_NAME: ${{ steps.run-deploy.outputs.stack_name }}
         run: |
-          chmod +x scripts/extract-outputs.sh
-          scripts/extract-outputs.sh "${IAC_TYPE}" "${STACK_NAME}" > outputs.json
+          chmod +x .sdlc-platform/scripts/extract-outputs.sh
+          .sdlc-platform/scripts/extract-outputs.sh "${IAC_TYPE}" "${STACK_NAME}" > outputs.json
 
           # Output as JSON string for next job
           OUTPUTS_JSON=$(cat outputs.json | jq -c '.')
@@ -214,16 +252,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Checkout SDLC platform scripts
+        uses: actions/checkout@v4
+        with:
+          repository: Darw-ai/github-pipelines-playground
+          path: .sdlc-platform
+          sparse-checkout: |
+            scripts
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: scripts/package.json
+          cache-dependency-path: .sdlc-platform/scripts/package.json
 
       - name: Install script dependencies
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           npm install
 
       - name: Download deployment outputs
@@ -251,7 +297,7 @@ jobs:
           AI_MODEL: ${{ secrets.AI_MODEL || 'bedrock/amazon.nova-pro-v1:0' }}
           AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           node ai-generate-tests.js
 
           echo "📋 Generated Test Plan:"
@@ -260,7 +306,7 @@ jobs:
       - name: Execute sanity tests
         id: run-tests
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           node execute-tests.js 2>&1 | tee ../test-results.log
 
           # Preserve exit code
@@ -341,16 +387,24 @@ jobs:
         with:
           fetch-depth: 0  # Full history for branching
 
+      - name: Checkout SDLC platform scripts
+        uses: actions/checkout@v4
+        with:
+          repository: Darw-ai/github-pipelines-playground
+          path: .sdlc-platform
+          sparse-checkout: |
+            scripts
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: scripts/package.json
+          cache-dependency-path: .sdlc-platform/scripts/package.json
 
       - name: Install script dependencies
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           npm install
 
       - name: Download failure logs
@@ -380,7 +434,7 @@ jobs:
           AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
           FAILURE_STAGE: ${{ needs.deploy.result == 'failure' && 'deploy' || 'test' }}
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           node ai-generate-fix.js
 
           echo "📝 Generated Fix:"

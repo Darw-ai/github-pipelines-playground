@@ -1,6 +1,33 @@
 name: AI Project Scaffolder
 
 on:
+  # Allow this workflow to be called from other repositories
+  workflow_call:
+    inputs:
+      repo_name:
+        description: 'Name of the new repository/project'
+        required: true
+        type: string
+      task_issue_number:
+        description: 'GitHub Issue number for status tracking'
+        required: true
+        type: string
+      scaffold_prompt:
+        description: 'Full prompt with product/security/compliance specs'
+        required: true
+        type: string
+    secrets:
+      AI_API_KEY:
+        description: 'API key for AI provider (OpenAI, Anthropic, etc.)'
+        required: false
+      AI_MODEL:
+        description: 'AI model identifier (e.g., anthropic/claude-3-5-sonnet-20241022)'
+        required: false
+      AI_ENDPOINT:
+        description: 'Custom AI endpoint URL'
+        required: false
+
+  # Keep workflow_dispatch for testing in this repo
   workflow_dispatch:
     inputs:
       repo_name:
@@ -38,8 +65,16 @@ jobs:
       dependencies: ${{ steps.create-plan.outputs.dependencies }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout target repository
         uses: actions/checkout@v4
+
+      - name: Checkout SDLC platform scripts
+        uses: actions/checkout@v4
+        with:
+          repository: Darw-ai/github-pipelines-playground
+          path: .sdlc-platform
+          sparse-checkout: |
+            scripts
 
       - name: Update tracking issue - Start
         uses: actions/github-script@v7
@@ -57,11 +92,11 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: scripts/package.json
+          cache-dependency-path: .sdlc-platform/scripts/package.json
 
       - name: Install script dependencies
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           npm install
 
       - name: Generate project plan via AI
@@ -73,7 +108,7 @@ jobs:
           SCAFFOLD_PROMPT: ${{ github.event.inputs.scaffold_prompt }}
           PROJECT_NAME: ${{ github.event.inputs.repo_name }}
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           node ai-generate-plan.js
 
           # Read outputs
@@ -146,11 +181,11 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: scripts/package.json
+          cache-dependency-path: .sdlc-platform/scripts/package.json
 
       - name: Install script dependencies
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           npm install
 
       - name: Generate file content via AI
@@ -162,7 +197,7 @@ jobs:
           FILE_PROMPT: ${{ matrix.file.prompt }}
           PROJECT_NAME: ${{ github.event.inputs.repo_name }}
         run: |
-          cd scripts
+          cd .sdlc-platform/scripts
           node ai-generate-file.js
 
           # Create directory structure if needed

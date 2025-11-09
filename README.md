@@ -1,8 +1,10 @@
 # GitHub-Native AI-Powered SDLC Platform
 
-> **Version 2.0** - Complete rewrite for GitHub Actions
+> **Version 2.1** - Centralized Reusable Workflows Architecture
 
 A fully automated **Software Development Lifecycle (SDLC) platform** powered by AI, running natively on **GitHub Actions** and **GitHub Apps**. No external infrastructure required.
+
+**✨ Now with Reusable Workflows** - Client repositories only need 2 tiny wrapper files + secrets. No code duplication!
 
 ## 🚀 Features
 
@@ -42,44 +44,50 @@ Automated Deploy → Test → Fix cycle:
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start (For Client Repositories)
 
 ### Prerequisites
 
 1. **GitHub Account** with a repository
-2. **GitHub App** configured (see [GitHub App Setup Guide](docs/GITHUB_APP_SETUP.md))
-3. **Cloud Account** (AWS/GCP/Azure) with OIDC configured (optional, for deployments)
-4. **AI API Access** (AWS Bedrock, OpenAI, or Anthropic)
+2. **AI API Access** (AWS Bedrock, OpenAI, or Anthropic)
+3. **Cloud Account** (AWS/GCP/Azure) - optional, only for deployments
 
-### 1. Install Workflows
-
-Copy workflows to your repository:
+### 1. Copy Wrapper Workflows (2 files!)
 
 ```bash
-# Clone this repo
-git clone https://github.com/YOUR-ORG/github-pipelines-playground.git
-cd github-pipelines-playground
+# Create workflows directory
+mkdir -p .github/workflows
 
-# Copy workflows to your project
-cp -r .github YOUR_PROJECT/.github
-cp -r scripts YOUR_PROJECT/scripts
-cd YOUR_PROJECT
-
-# Install script dependencies
-cd scripts && npm install && cd ..
+# Copy the example wrapper workflows
+curl -o .github/workflows/scaffold.yml https://raw.githubusercontent.com/Darw-ai/github-pipelines-playground/main/examples/client-workflows/scaffold.yml
+curl -o .github/workflows/sdlc-loop.yml https://raw.githubusercontent.com/Darw-ai/github-pipelines-playground/main/examples/client-workflows/sdlc-loop.yml
 
 # Commit
-git add .github scripts
-git commit -m "Add SDLC workflows"
+git add .github/workflows/
+git commit -m "Add SDLC platform workflows"
 git push
 ```
 
+**That's it! No scripts to maintain, no dependencies to install.** 🎉
+
 ### 2. Configure Secrets
 
-Add these secrets to your repository (Settings → Secrets and variables → Actions):
+Add these secrets to **your repository** (Settings → Secrets and variables → Actions):
 
+**For Anthropic (Claude):**
 ```bash
-gh secret set AI_API_KEY --body "your-ai-api-key"
+gh secret set AI_API_KEY --body "sk-ant-your-api-key"
+gh secret set AI_MODEL --body "anthropic/claude-3-5-sonnet-20241022"
+```
+
+**For OpenAI:**
+```bash
+gh secret set AI_API_KEY --body "sk-your-api-key"
+gh secret set AI_MODEL --body "openai/gpt-4-turbo"
+```
+
+**For AWS Bedrock:**
+```bash
 gh secret set AI_MODEL --body "bedrock/amazon.nova-pro-v1:0"
 gh secret set AWS_OIDC_ROLE_ARN --body "arn:aws:iam::ACCOUNT:role/GitHubActionsRole"
 gh secret set AWS_REGION --body "us-east-1"
@@ -122,6 +130,42 @@ curl -X POST https://your-platform-hub.vercel.app/api/scaffold \
 
 ## 🏗️ Architecture
 
+### Centralized Reusable Workflows (New in v2.1!)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  SDLC Platform (Darw-ai/github-pipelines-playground)     │
+│  - Reusable workflows (.github/workflows/)               │
+│  - Scripts (scripts/)                                    │
+│  - Single source of truth                                │
+│  - No client maintenance needed                          │
+└────────────┬─────────────────────────────────────────────┘
+             │
+             │ (workflow_call - calls centralized workflows)
+             │
+    ┌────────┴────────┬─────────────┬─────────────┐
+    ▼                 ▼             ▼             ▼
+┌─────────┐      ┌─────────┐   ┌─────────┐   ┌─────────┐
+│ Client-1│      │ Client-2│   │ Client-3│   │ Client-N│
+│         │      │         │   │         │   │         │
+│ 2 files │      │ 2 files │   │ 2 files │   │ 2 files │
+│ + secrets│     │ + secrets│  │ + secrets│  │ + secrets│
+│         │      │         │   │         │   │         │
+│ NO      │      │ NO      │   │ NO      │   │ NO      │
+│ scripts!│      │ scripts!│   │ scripts!│   │ scripts!│
+└─────────┘      └─────────┘   └─────────┘   └─────────┘
+
+Client repositories only need:
+  ✅ .github/workflows/scaffold.yml (10 lines)
+  ✅ .github/workflows/sdlc-loop.yml (10 lines)
+  ✅ Repository secrets
+  ❌ No scripts to copy
+  ❌ No dependencies to install
+  ❌ No maintenance overhead
+```
+
+### Traditional Architecture (Platform Hub - Optional)
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         USERS                                   │
@@ -137,25 +181,7 @@ curl -X POST https://your-platform-hub.vercel.app/api/scaffold \
 └────────────────────────────┬───────────────────────────────────┘
                              │
                              ▼
-┌────────────────────────────────────────────────────────────────┐
-│          GitHub Repository (.github/workflows/)                │
-│                                                                │
-│  scaffold.yml              sdlc-loop.yml                       │
-│  ┌──────────────┐         ┌──────────────┐                    │
-│  │ Generate     │         │    Deploy    │                    │
-│  │ Plan (AI)    │         │              │                    │
-│  ├──────────────┤         ├──────────────┤                    │
-│  │ Generate     │         │    Test      │                    │
-│  │ Code (AI)    │         │    (AI)      │                    │
-│  ├──────────────┤         ├──────────────┤                    │
-│  │ Create PR    │         │    Fix       │                    │
-│  │              │         │    (AI)      │                    │
-│  └──────────────┘         └──────────────┘                    │
-│                                                                │
-│  Scripts (./scripts/)                                          │
-│  - ai-client.js, ai-generate-*.js, execute-tests.js           │
-│  - detect-iac.sh, run-deployment.sh, extract-outputs.sh       │
-└────────────────────────────┬───────────────────────────────────┘
+                  Calls Reusable Workflows
                              │
                              ▼
 ┌────────────────────────────────────────────────────────────────┐
@@ -167,11 +193,13 @@ curl -X POST https://your-platform-hub.vercel.app/api/scaffold \
 
 ### Key Design Principles
 
-1. **100% GitHub-Native**: No external databases, queues, or servers (except optional Platform Hub)
-2. **AI-Agnostic**: Works with any AI provider (Bedrock, OpenAI, Anthropic, Azure)
-3. **Secure by Default**: OIDC, encrypted secrets, least-privilege permissions
-4. **Observable**: Full audit trail via GitHub Issues
-5. **Cost-Effective**: Pay only for GitHub Actions minutes (~$0-50/month)
+1. **Centralized Platform**: Single source of truth, no code duplication
+2. **100% GitHub-Native**: No external databases, queues, or servers (except optional Platform Hub)
+3. **AI-Agnostic**: Works with any AI provider (Bedrock, OpenAI, Anthropic, Azure)
+4. **Secure by Default**: OIDC, encrypted secrets, least-privilege permissions
+5. **Observable**: Full audit trail via GitHub Issues
+6. **Zero Maintenance**: Clients automatically get platform updates
+7. **Cost-Effective**: Pay only for GitHub Actions minutes (~$0-50/month)
 
 ---
 

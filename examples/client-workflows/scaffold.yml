@@ -1,0 +1,42 @@
+# Client Wrapper for AI Project Scaffolder
+#
+# Place this file in your client repository at:
+# .github/workflows/scaffold.yml
+#
+# This workflow calls the centralized reusable workflow from the SDLC platform
+
+name: Scaffold New Project
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: 'Name of the new repository/project'
+        required: true
+        type: string
+      task_issue_number:
+        description: 'GitHub Issue number for status tracking'
+        required: true
+        type: string
+      scaffold_prompt:
+        description: 'Full prompt with product/security/compliance specs'
+        required: true
+        type: string
+
+jobs:
+  scaffold:
+    # Call the centralized reusable workflow
+    uses: Darw-ai/github-pipelines-playground/.github/workflows/scaffold.yml@main
+    with:
+      repo_name: ${{ inputs.repo_name }}
+      task_issue_number: ${{ inputs.task_issue_number }}
+      scaffold_prompt: ${{ inputs.scaffold_prompt }}
+    secrets:
+      # Pass all required secrets from your repository secrets
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_MODEL: ${{ secrets.AI_MODEL }}
+      AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
