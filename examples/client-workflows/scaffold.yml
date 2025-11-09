@@ -10,8 +10,8 @@ name: Scaffold New Project
 on:
   workflow_dispatch:
     inputs:
-      repo_name:
-        description: 'Name of the new repository/project'
+      project_name:
+        description: 'Name of the project/scaffold (used for branch naming)'
         required: true
         type: string
       task_issue_number:
@@ -28,7 +28,7 @@ jobs:
     # Call the centralized reusable workflow
     uses: Darw-ai/github-pipelines-playground/.github/workflows/scaffold.yml@main
     with:
-      repo_name: ${{ inputs.repo_name }}
+      project_name: ${{ inputs.project_name }}
       task_issue_number: ${{ inputs.task_issue_number }}
       scaffold_prompt: ${{ inputs.scaffold_prompt }}
     secrets:

@@ -4,8 +4,8 @@ on:
   # Allow this workflow to be called from other repositories
   workflow_call:
     inputs:
-      repo_name:
-        description: 'Name of the new repository/project'
+      project_name:
+        description: 'Name of the project/scaffold (used for branch naming)'
         required: true
         type: string
       task_issue_number:
@@ -30,8 +30,8 @@ on:
   # Keep workflow_dispatch for testing in this repo
   workflow_dispatch:
     inputs:
-      repo_name:
-        description: 'Name of the new repository/project'
+      project_name:
+        description: 'Name of the project/scaffold (used for branch naming)'
         required: true
         type: string
       task_issue_number:
@@ -51,7 +51,7 @@ permissions:
 
 # Prevent concurrent scaffold runs
 concurrency:
-  group: scaffold-${{ github.event.inputs.repo_name }}
+  group: scaffold-${{ github.event.inputs.project_name }}
   cancel-in-progress: false
 
 jobs:
@@ -84,7 +84,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: ${{ github.event.inputs.task_issue_number }},
-              body: '🤖 **AI Scaffolding Initiated**\n\n**Project:** `${{ github.event.inputs.repo_name }}`\n**Status:** Generating project plan...\n\n---\n*Started at: ' + new Date().toISOString() + '*'
+              body: '🤖 **AI Scaffolding Initiated**\n\n**Project:** `${{ github.event.inputs.project_name }}`\n**Status:** Generating project plan...\n\n---\n*Started at: ' + new Date().toISOString() + '*'
             });
 
       - name: Setup Node.js
@@ -104,7 +104,7 @@ jobs:
           AI_MODEL: ${{ secrets.AI_MODEL || 'bedrock/amazon.nova-pro-v1:0' }}
           AI_ENDPOINT: ${{ secrets.AI_ENDPOINT || 'https://bedrock-runtime.us-east-1.amazonaws.com' }}
           SCAFFOLD_PROMPT: ${{ github.event.inputs.scaffold_prompt }}
-          PROJECT_NAME: ${{ github.event.inputs.repo_name }}
+          PROJECT_NAME: ${{ github.event.inputs.project_name }}
         run: |
           cd .sdlc-platform/scripts
           node ai-generate-plan.js
@@ -202,7 +202,7 @@ jobs:
           AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
           FILE_PATH: ${{ matrix.file.path }}
           FILE_PROMPT: ${{ matrix.file.prompt }}
-          PROJECT_NAME: ${{ github.event.inputs.repo_name }}
+          PROJECT_NAME: ${{ github.event.inputs.project_name }}
         run: |
           cd .sdlc-platform/scripts
           node ai-generate-file.js
@@ -280,7 +280,7 @@ jobs:
 
       - name: Create scaffold branch
         run: |
-          BRANCH_NAME="ai-scaffold/${{ github.event.inputs.repo_name }}"
+          BRANCH_NAME="ai-scaffold/${{ github.event.inputs.project_name }}"
           git checkout -b "$BRANCH_NAME"
 
       - name: Debug - List downloaded artifacts
@@ -330,11 +330,11 @@ jobs:
       - name: Commit scaffold
         run: |
           git add .
-          git commit -m "feat: AI-generated scaffold for ${{ github.event.inputs.repo_name }} (issue #${{ github.event.inputs.task_issue_number }})"
+          git commit -m "feat: AI-generated scaffold for ${{ github.event.inputs.project_name }} (issue #${{ github.event.inputs.task_issue_number }})"
 
       - name: Push scaffold branch
         run: |
-          BRANCH_NAME="ai-scaffold/${{ github.event.inputs.repo_name }}"
+          BRANCH_NAME="ai-scaffold/${{ github.event.inputs.project_name }}"
           echo "Pushing branch: $BRANCH_NAME"
           git push -u origin "$BRANCH_NAME"
 
@@ -351,13 +351,13 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          branch: ai-scaffold/${{ github.event.inputs.repo_name }}
+          branch: ai-scaffold/${{ github.event.inputs.project_name }}
           base: main
-          title: "feat: AI-Generated Project Scaffold - ${{ github.event.inputs.repo_name }}"
+          title: "feat: AI-Generated Project Scaffold - ${{ github.event.inputs.project_name }}"
           body: |
             ## 🤖 AI-Generated Project Scaffold
 
-            **Project Name:** `${{ github.event.inputs.repo_name }}`
+            **Project Name:** `${{ github.event.inputs.project_name }}`
             **Tracking Issue:** #${{ github.event.inputs.task_issue_number }}
 
             ---
