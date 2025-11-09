@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+.nyc_output/
+
+# Production builds
+dist/
+build/
+.next/
+out/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Deployment artifacts (generated during workflows)
+deployment.log
+test-results.log
+outputs.json
+sanity-tests.json
+plan.json
+fix.patch
+generated-file.txt
+generated/
+cdk-outputs.json
+auto-generated-template.yaml
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+tfplan
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+
+# GitHub App private keys (NEVER commit these!)
+*.pem
+private-key.pem

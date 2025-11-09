@@ -1,0 +1,350 @@
+name: AI Project Scaffolder
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: 'Name of the new repository/project'
+        required: true
+        type: string
+      task_issue_number:
+        description: 'GitHub Issue number for status tracking'
+        required: true
+        type: string
+      scaffold_prompt:
+        description: 'Full prompt with product/security/compliance specs'
+        required: true
+        type: string
+
+# Least-privilege permissions
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# Prevent concurrent scaffold runs
+concurrency:
+  group: scaffold-${{ github.event.inputs.repo_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ========================================================
+  # JOB 1: Generate Project Plan
+  # ========================================================
+  generate-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      plan_json: ${{ steps.create-plan.outputs.plan }}
+      dependencies: ${{ steps.create-plan.outputs.dependencies }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update tracking issue - Start
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '🤖 **AI Scaffolding Initiated**\n\n**Project:** `${{ github.event.inputs.repo_name }}`\n**Status:** Generating project plan...\n\n---\n*Started at: ' + new Date().toISOString() + '*'
+            });
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/package.json
+
+      - name: Install script dependencies
+        run: |
+          cd scripts
+          npm install
+
+      - name: Generate project plan via AI
+        id: create-plan
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL || 'bedrock/amazon.nova-pro-v1:0' }}
+          AI_ENDPOINT: ${{ secrets.AI_ENDPOINT || 'https://bedrock-runtime.us-east-1.amazonaws.com' }}
+          SCAFFOLD_PROMPT: ${{ github.event.inputs.scaffold_prompt }}
+          PROJECT_NAME: ${{ github.event.inputs.repo_name }}
+        run: |
+          cd scripts
+          node ai-generate-plan.js
+
+          # Read outputs
+          PLAN=$(cat ../plan.json | jq -c '.files')
+          DEPS=$(cat ../plan.json | jq -c '.dependencies')
+
+          # Set outputs for next job
+          echo "plan=${PLAN}" >> $GITHUB_OUTPUT
+          echo "dependencies=${DEPS}" >> $GITHUB_OUTPUT
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scaffold-plan
+          path: plan.json
+          retention-days: 7
+
+      - name: Update tracking issue - Plan generated
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const plan = require('./plan.json');
+            const fileCount = plan.files.length;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '✅ **Project Plan Generated**\n\n' +
+                    '📦 **Files to generate:** ' + fileCount + '\n' +
+                    '📝 **Structure:**\n```\n' +
+                    plan.files.map(f => f.path).join('\n') +
+                    '\n```\n\n' +
+                    '*Next: Generating code files...*'
+            });
+
+      - name: Update tracking issue - Plan failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '❌ **Plan Generation Failed**\n\nCheck workflow logs for details.'
+            });
+
+  # ========================================================
+  # JOB 2: Generate Code Files (Parallel Matrix)
+  # ========================================================
+  generate-code:
+    needs: generate-plan
+    runs-on: ubuntu-latest
+
+    # Matrix strategy - one job per file
+    strategy:
+      matrix:
+        file: ${{ fromJson(needs.generate-plan.outputs.plan_json) }}
+      max-parallel: 5  # Limit parallel jobs to avoid rate limits
+      fail-fast: false  # Continue even if one file fails
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/package.json
+
+      - name: Install script dependencies
+        run: |
+          cd scripts
+          npm install
+
+      - name: Generate file content via AI
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_MODEL: ${{ secrets.AI_MODEL || 'bedrock/amazon.nova-pro-v1:0' }}
+          AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
+          FILE_PATH: ${{ matrix.file.path }}
+          FILE_PROMPT: ${{ matrix.file.prompt }}
+          PROJECT_NAME: ${{ github.event.inputs.repo_name }}
+        run: |
+          cd scripts
+          node ai-generate-file.js
+
+          # Create directory structure if needed
+          mkdir -p "../generated/$(dirname "$FILE_PATH")"
+          mv ../generated-file.txt "../generated/$FILE_PATH"
+
+      - name: Upload generated file
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-file-${{ strategy.job-index }}
+          path: generated/${{ matrix.file.path }}
+          retention-days: 7
+
+      - name: Comment progress on issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '📝 Generated: `${{ matrix.file.path }}`'
+            });
+
+  # ========================================================
+  # JOB 3: Commit Scaffold & Create PR
+  # ========================================================
+  commit-scaffold:
+    needs: [generate-plan, generate-code]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for branching
+
+      - name: Download all generated files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: generated-file-*
+          path: generated-files
+          merge-multiple: true
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: scaffold-plan
+          path: .
+
+      - name: Setup Git
+        run: |
+          git config user.name "AI Scaffolder"
+          git config user.email "ai-scaffolder@github-actions"
+
+      - name: Create scaffold branch
+        run: |
+          BRANCH_NAME="ai-scaffold/${{ github.event.inputs.repo_name }}"
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Move generated files to root
+        run: |
+          # Move all files from artifacts to root
+          find generated-files -type f -exec sh -c 'mkdir -p "$(dirname "{}")" && mv "{}" "$(echo "{}" | sed "s|generated-files/||")"' \;
+          rm -rf generated-files
+
+      - name: Create dependencies file (if applicable)
+        run: |
+          if [ -f plan.json ]; then
+            DEPS=$(cat plan.json | jq -r '.dependencies // empty')
+            if [ ! -z "$DEPS" ]; then
+              echo "$DEPS" > package.json
+            fi
+          fi
+
+      - name: Commit scaffold
+        run: |
+          git add .
+          git commit -m "feat: Initial AI-generated project scaffold
+
+Project: ${{ github.event.inputs.repo_name }}
+Generated by: AI Scaffolder
+Issue: #${{ github.event.inputs.task_issue_number }}
+
+This scaffold was generated based on the following specification:
+${{ github.event.inputs.scaffold_prompt }}
+"
+
+      - name: Push scaffold branch
+        run: |
+          BRANCH_NAME="ai-scaffold/${{ github.event.inputs.repo_name }}"
+          git push origin "$BRANCH_NAME"
+
+      - name: Create Pull Request
+        id: create-pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ai-scaffold/${{ github.event.inputs.repo_name }}
+          base: main
+          title: "feat: AI-Generated Project Scaffold - ${{ github.event.inputs.repo_name }}"
+          body: |
+            ## 🤖 AI-Generated Project Scaffold
+
+            **Project Name:** `${{ github.event.inputs.repo_name }}`
+            **Tracking Issue:** #${{ github.event.inputs.task_issue_number }}
+
+            ---
+
+            ### 📋 Specification
+
+            ```
+            ${{ github.event.inputs.scaffold_prompt }}
+            ```
+
+            ---
+
+            ### 📦 Generated Files
+
+            This PR contains a complete project structure generated by AI based on the specification above.
+
+            **⚠️ Important:** Please review all files before merging:
+            - [ ] Verify code quality and best practices
+            - [ ] Check for security issues
+            - [ ] Validate dependencies
+            - [ ] Run tests (if applicable)
+            - [ ] Review compliance requirements
+
+            ---
+
+            *Generated at: ${{ github.run_id }} | Workflow: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})*
+          labels: |
+            ai-generated
+            scaffold
+            needs-review
+
+      - name: Update tracking issue - Success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '✅ **Scaffolding Complete!**\n\n' +
+                    '🔗 **Pull Request:** #${{ steps.create-pr.outputs.pull-request-number }}\n' +
+                    '📊 **Review:** ${{ steps.create-pr.outputs.pull-request-url }}\n\n' +
+                    '**Next Steps:**\n' +
+                    '1. Review the generated code\n' +
+                    '2. Run any necessary tests\n' +
+                    '3. Merge the PR when ready\n\n' +
+                    '*This issue will be automatically closed.*'
+            });
+
+            // Close the tracking issue
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              state: 'closed',
+              labels: ['completed', 'ai-scaffold']
+            });
+
+      - name: Update tracking issue - Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              body: '❌ **Scaffold Commit Failed**\n\n' +
+                    'Failed to commit the generated files or create PR.\n\n' +
+                    '**Logs:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})'
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.inputs.task_issue_number }},
+              labels: ['failed']
+            });

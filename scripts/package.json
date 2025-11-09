@@ -1,0 +1,24 @@
+{
+  "name": "github-sdlc-scripts",
+  "version": "2.0.0",
+  "description": "Scripts for GitHub-native AI-powered SDLC platform",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.645.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.4.0",
+    "glob": "^11.0.0",
+    "openai": "^4.56.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
