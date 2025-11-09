@@ -1,0 +1,451 @@
+Here is a comprehensive guide to re-architecting the AI-Powered SDLC system to run natively on GitHub, incorporating your new requirement for AI-driven project scaffolding.
+
+This plan is designed to be implemented by an AI, with clear separation of components and workflow logic.
+
+Guide: AI-Powered SDLC Platform on GitHub Actions
+1. executive Summary
+This document outlines a new architecture to migrate the "AI-Powered SDLC Deployment System" from its AWS-centric (ECS, Lambda) design to a GitHub-native platform. This new system leverages GitHub Actions for workflow execution, GitHub Apps for a secure API and UI layer, and GitHub Issues for state and session management, replacing DynamoDB.
+
+The platform will provide two core, AI-driven functions:
+
+Project Scaffolding: A new capability that accepts a prompt and specification documents (product, security, compliance) to generate a new, compliant software project in a GitHub repository.
+
+SDLC Automation (Deploy-Test-Fix): The migrated functionality to deploy, test, and automatically fix code in existing repositories.
+
+The entire system will be accessible via a secure API (for pipeline integration) and a simple web UI.
+
+2. Core Philosophy: GitHub-Native
+Compute: All long-running tasks (deploy, test, fix) previously on ECS Fargate will become GitHub Actions jobs.
+
+Orchestration: The API Handler Lambda and SDLC Manager logic will be combined into GitHub Actions workflows (.yml files).
+
+State Management: The DynamoDB table will be replaced by GitHub Issues. Each "session" (a deploy, a fix, a scaffold) will be a dedicated Issue, with logs and status posted as comments.
+
+API Layer: The public-facing "secure API" and "web UI" will be a lightweight GitHub App. This app will authenticate users (via GitHub OAuth) and trigger workflows using the workflow_dispatch event, passing inputs securely.
+
+AI Integration: AI models (like Bedrock, or any other) will be called via standard REST APIs from within GitHub Actions jobs, using API keys stored in GitHub Encrypted Secrets.
+
+3. High-Level Architecture
+                                  ┌──────────────────────┐
+                                  │   User (Web UI)      │
+                                  └──────────┬───────────┘
+                                             │ (OAuth)
+                                             ▼
+  ┌──────────────────────┐      ┌──────────────────────────┐      ┌─────────────────────────┐
+  │ External Pipeline    │ ──►  │   Platform Hub (GitHub   │      │   AI Model API          │
+  │ (e.g., Jenkins, CI)  │ (API)│   App + Web Service)     │ ◄──► │   (Bedrock, OpenAI, etc)│
+  └──────────────────────┘      └──────────┬───────────────┘      └──────────▲──────────┘
+                                           │ (Triggers Workflow)             │ (API Call)
+                                           │                                 │
+                                           ▼                                 │
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ GitHub Repository (.github/workflows/)                                   │
+  │                                                                          │
+  │  Workflow 1: scaffold.yml     Workflow 2: sdlc-loop.yml                  │
+  │  ┌──────────────┐             ┌──────────┐ ┌──────────┐ ┌───────────┐   │
+  │  │ Generate     │             │  Deploy  │ │  Test    │ │  Fix      │   │
+  │  │ Code (Job)   ├──────────►  │  (Job)   ├─► (Job)    ├─► (Job)     │   │
+  │  └──────┬───────┘             └────┬─────┘ └────┬─────┘ └─────┬─────┘   │
+  │         │                         │            │             │           │
+  │         │ (Creates PR)            │ (Logs)     │ (Logs)      │ (Creates PR)
+  │         │                         │            │             │           │
+  │         └───────────────────►     ▼            ▼             ▼           │
+  │                               ┌────────────────────────────────┐         │
+  │                               │ GitHub Issues (State Tracking) │         │
+  │                               └────────────────────────────────┘         │
+  └──────────────────────────────────────────────────────────────────────────┘
+4. Implementation Guide: System Components
+Below are the clear instructions for building each component.
+
+Component 1: The "Platform Hub" (GitHub App)
+This is the secure API and UI layer. It does not run on GitHub Actions but as a separate service (e.g., a Next.js/Vercel or FastAPI/Fly.io app).
+
+Purpose:
+
+Provide a web UI for users to scaffold new projects or manage existing ones.
+
+Authenticate users via the GitHub OAuth Flow.
+
+Expose a secure, token-based API for external pipelines.
+
+Use its GitHub App identity to perform actions on behalf of the user.
+
+Core Logic (Instructions):
+
+Register a new GitHub App:
+
+Give it permissions: issues: write, pull_requests: write, contents: write, workflows: write (to trigger workflow_dispatch).
+
+Store its App ID, private key, and client secret.
+
+Build the API Endpoints:
+
+POST /scaffold:
+
+Accepts: repo_name, prompt (with specs for product, security, etc.).
+
+Action: Creates a new repository, creates a new Issue (e.g., [Task] Scaffold: repo_name), then triggers the scaffold.yml workflow via workflow_dispatch, passing the issue_number and prompt.
+
+POST /sdlc-deploy:
+
+Accepts: repo_full_name, branch.
+
+Action: Creates an Issue in that repo (e.g., [Task] SDLC Deploy: branch), then triggers the sdlc-loop.yml workflow, passing the issue_number.
+
+Authentication: The API authenticates to GitHub by generating a short-lived Installation Access Token for the target repository. This token is used for all GitHub API calls (creating issues, dispatching workflows).
+
+Component 2: Workflow - Project Scaffolding
+This is a new workflow that replaces the need for a local codebase.
+
+File: .github/workflows/scaffold.yml
+
+Purpose: Generates a new software system from a high-level prompt.
+
+Trigger: workflow_dispatch (triggered by the Platform Hub).
+
+YAML
+
+# .github/workflows/scaffold.yml
+name: AI Project Scaffolder
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_name:
+        description: 'Name of the new repository'
+        required: true
+      task_issue_number:
+        description: 'The GitHub Issue for status tracking'
+        required: true
+      scaffold_prompt:
+        description: 'The full prompt with all specs'
+        required: true
+
+# Grant least-privilege permissions
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  generate-plan:
+    runs-on: ubuntu-latest
+    outputs:
+      plan: ${{ steps.create-plan.outputs.plan_json }}
+    steps:
+      - name: 1. Update Task Issue
+        uses: actions/github-script@v6
+        with:
+          issue-number: ${{ github.event.inputs.task_issue_number }}
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🤖 AI Scaffolding initiated. Generating project plan...'
+            });
+
+      - name: 2. Call AI to Generate Project Plan
+        id: create-plan
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          PROMPT: ${{ github.event.inputs.scaffold_prompt }}
+        run: |
+          # This script calls the AI API
+          # The AI should return a JSON object describing the file structure,
+          # dependencies (e.g., package.json), and a brief plan for each file.
+          # Example AI instructions:
+          # "You are a software architect. Based on the following prompt,
+          # generate a JSON object with a 'files' array. Each object in
+          # the array should have 'path' and 'generation_prompt' keys.
+          # Also include a 'dependencies' key with a 'package.json' structure."
+          #
+          # (Implementation: Use curl or a Node.js script to call the AI)
+          #
+          # echo "::set-output name=plan_json::$(./scripts/generate-scaffold-plan.js)"
+
+  generate-code:
+    needs: generate-plan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.generate-plan.outputs.plan) }} # This is a file object
+    steps:
+      - name: 1. Call AI to Generate File Content
+        id: create-file
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          PROMPT: ${{ matrix.file.generation_prompt }}
+        run: |
+          # This script calls the AI to get the raw code for a single file
+          # (Implementation: Use curl or Node.js)
+          #
+          # ./scripts/generate-file-content.js > ./${{ matrix.file.path }}
+
+      - name: 2. Upload File as Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: generated-code
+          path: ./${{ matrix.file.path }} # The path from the matrix
+
+  commit-scaffold:
+    needs: generate-code
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout repository
+        uses: actions/checkout@v3
+
+      - name: 2. Download all generated code
+        uses: actions/download-artifact@v3
+        with:
+          name: generated-code
+          path: ./scaffold
+
+      - name: 3. Create new branch and commit
+        run: |
+          git checkout -b ai-scaffold/${{ github.event.inputs.repo_name }}
+          mv ./scaffold/* .
+          rmdir ./scaffold
+          git add .
+          git commit -m "feat: Initial scaffold by AI"
+          git push origin ai-scaffold/${{ github.event.inputs.repo_name }}
+
+      - name: 4. Create Pull Request
+        id: create-pr
+        uses: actions/create-pull-request@v5
+        with:
+          branch: ai-scaffold/${{ github.event.inputs.repo_name }}
+          base: main
+          title: 'feat: Initial AI Project Scaffold for ${{ github.event.inputs.repo_name }}'
+          body: |
+            This PR contains the initial project structure generated by the AI scaffolder.
+
+            Tracked in Issue #${{ github.event.inputs.task_issue_number }}
+
+      - name: 5. Update Task Issue with PR Link
+        uses: actions/github-script@v6
+        with:
+          issue-number: ${{ github.event.inputs.task_issue_number }}
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '✅ AI Scaffolding complete. Review PR at: ${{ steps.create-pr.outputs.pull-request-url }}'
+            });
+            github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });
+Component 3: Workflow - SDLC Deploy-Test-Fix Loop
+This workflow replaces the entire AWS ECS/Lambda stack. It's a single, powerful workflow file that lives in the target repository.
+
+File: .github/workflows/sdlc-loop.yml
+
+Purpose: Orchestrates the Deploy, Test, and Fix cycle.
+
+Triggers:
+
+push (e.g., on the main branch after a PR is merged).
+
+workflow_dispatch (triggered by the Platform Hub).
+
+YAML
+
+# .github/workflows/sdlc-loop.yml
+name: AI-Powered SDLC Loop
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      task_issue_number:
+        description: 'The GitHub Issue for status tracking'
+        required: true
+
+# Prevent multiple runs from colliding
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write # If using OIDC for AWS deployment
+
+jobs:
+  # =================================================================
+  # JOB 1: DEPLOY (Replaces Deployer Container)
+  # =================================================================
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      deployment-log: ${{ steps.save-log.outputs.log-file }}
+      deployment-outputs: ${{ steps.save-outputs.outputs.json-file }}
+    steps:
+      - name: 1. Update Task Issue
+        if: github.event.inputs.task_issue_number
+        uses: actions/github-script@v6
+        with:
+          issue-number: ${{ github.event.inputs.task_issue_number }}
+          script: 'github.rest.issues.createComment({ ... body: "🚀 Deployment initiated..." })'
+
+      - name: 2. Checkout Code
+        uses: actions/checkout@v3
+
+      # (Optional: Configure AWS Credentials via OIDC)
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: 3. Detect IaC Type and Deploy
+        id: run-deploy
+        run: |
+          # This script replaces the logic from 'deployer-container/index.ts'
+          # 1. Scan for cdk.json, template.yaml, serverless.yml, etc.
+          # 2. Run the appropriate command (cdk deploy, sam deploy, etc.)
+          # 3. Pipe ALL output (stdout and stderr) to a log file.
+          #    e.g., `cdk deploy --all --require-approval never &> deploy.log`
+          # 4. If the command fails, exit with a non-zero code.
+          # 5. Extract stack outputs (e.g., ApiUrl) and save to `outputs.json`
+          ./scripts/run-deployment.sh
+
+      - name: 4. Save Deployment Outputs
+        id: save-outputs
+        # Save the stack outputs (like ApiUrl) as an artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-outputs
+          path: outputs.json
+
+      - name: 5. Save Deployment Log (Success)
+        if: success()
+        id: save-log
+        # (Implementation: save deploy.log to artifact)
+        
+      - name: 6. Save Deployment Log (Failure)
+        if: failure()
+        id: save-log
+        # (Implementation: save deploy.log to artifact)
+
+  # =================================================================
+  # JOB 2: TEST (Replaces Sanity Tester Container)
+  # =================================================================
+  test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    outputs:
+      test-log: ${{ steps.save-log.outputs.log-file }}
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 2. Download Deployment Outputs
+        uses: actions/download-artifact@v3
+        with:
+          name: deployment-outputs
+          path: .
+
+      - name: 3. Call AI to Generate Sanity Tests
+        id: generate-tests
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          STACK_OUTPUTS: $(cat outputs.json)
+        run: |
+          # This script replaces 'api-inspector.ts' and 'ai-client.ts'
+          # 1. Scan codebase (similar to inspector)
+          # 2. Call AI with code context and stack outputs
+          # 3. AI returns a JSON test plan (as seen in your doc)
+          # 4. Save plan to `sanity-tests.json`
+          ./scripts/generate-tests.js
+
+      - name: 4. Run Sanity Tests
+        id: run-tests
+        run: |
+          # This script replaces 'test-executor.ts'
+          # 1. Reads `sanity-tests.json`
+          # 2. Reads `outputs.json` for variables
+          # 3. Executes HTTP requests
+          # 4. Saves results to `test-results.log` and exits non-zero on failure
+          ./scripts/run-tests.js
+
+      - name: 5. Save Test Log
+        id: save-log
+        # (Implementation: save test-results.log to artifact)
+
+  # =================================================================
+  # JOB 3: FIX (Replaces Fixer Container)
+  # =================================================================
+  fix:
+    needs: [deploy, test]
+    if: failure() # <-- This job ONLY runs if 'deploy' or 'test' fails
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 2. Download Failure Logs
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ needs.deploy.outputs.deployment-log }} # Get the log artifact
+          # (Add logic to also get test log if test failed)
+          path: ./logs
+
+      - name: 3. Call AI to Generate Fix
+        id: generate-fix
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          ERROR_LOG: $(cat ./logs/*.log)
+        run: |
+          # This script replaces 'fixer-container/ai-client.ts'
+          # 1. Bundles code context and error log
+          # 2. Calls AI: "Based on this error log [log] and this code,
+          #    generate a fix. Return the fix as a git-style patch file."
+          # 3. Saves the AI response to `fix.patch`
+          ./scripts/generate-fix.js
+
+      - name: 4. Apply and Commit Fix
+        id: apply-fix
+        run: |
+          git apply fix.patch
+          git checkout -b ai-fix/run-${{ github.run_id }}
+          git add .
+          git commit -m "fix: AI attempt to fix deployment failure"
+          git push origin ai-fix/run-${{ github.run_id }}
+
+      - name: 5. Create Pull Request
+        id: create-pr
+        uses: actions/create-pull-request@v5
+        with:
+          branch: ai-fix/run-${{ github.run_id }}
+          base: main
+          title: 'fix: AI Attempt to Fix Deployment Failure'
+          body: |
+            This PR is an automated attempt by the AI to fix a failed SDLC cycle.
+            
+            **Error Log:**
+            ```
+            ${{ env.ERROR_LOG }}
+            ```
+            
+            Merging this PR will trigger a new SDLC run.
+            Tracks Issue: #${{ github.event.inputs.task_issue_number }}
+
+      - name: 6. Update Task Issue with Fix PR
+        if: github.event.inputs.task_issue_number
+        uses: actions/github-script@v6
+        with:
+          issue-number: ${{ github.event.inputs.task_issue_number }}
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '❌ SDLC run failed. An automated fix has been proposed at: ${{ steps.create-pr.outputs.pull-request-url }}'
+            });
