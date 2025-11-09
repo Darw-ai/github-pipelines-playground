@@ -177,6 +177,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout SDLC platform scripts
+        uses: actions/checkout@v4
+        with:
+          repository: Darw-ai/github-pipelines-playground
+          path: .sdlc-platform
+          sparse-checkout: |
+            scripts
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
