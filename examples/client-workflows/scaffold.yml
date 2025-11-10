@@ -15,8 +15,8 @@ on:
         required: true
         type: string
       task_issue_number:
-        description: 'GitHub Issue number for status tracking'
-        required: true
+        description: 'GitHub Issue number for status tracking (optional)'
+        required: false
         type: string
       scaffold_prompt:
         description: 'Full prompt with product/security/compliance specs'
