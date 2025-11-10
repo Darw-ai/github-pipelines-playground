@@ -454,6 +454,13 @@ jobs:
 
           # Create fix branch
           FIX_BRANCH="ai-fix/run-${{ github.run_id }}"
+
+          # Delete remote branch if it exists (handles re-runs with same run_id)
+          if git ls-remote --exit-code --heads origin "$FIX_BRANCH" >/dev/null 2>&1; then
+            echo "⚠️  Branch already exists on remote, deleting it first..."
+            git push origin --delete "$FIX_BRANCH" || true
+          fi
+
           git checkout -b "$FIX_BRANCH"
 
           # Commit changes
