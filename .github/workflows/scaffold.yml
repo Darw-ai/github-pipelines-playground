@@ -170,7 +170,7 @@ jobs:
     strategy:
       matrix:
         file: ${{ fromJson(needs.generate-plan.outputs.plan_json) }}
-      max-parallel: 5  # Limit parallel jobs to avoid rate limits
+      max-parallel: 3  # Balance parallelism with rate limits
       fail-fast: false  # Continue even if one file fails
 
     steps:

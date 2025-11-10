@@ -148,28 +148,47 @@ async function callAnthropic({ prompt, systemPrompt, maxTokens, temperature, mod
   }
 
   const anthropic = new Anthropic({ apiKey: AI_API_KEY });
+  const maxRetries = 3;
+  let lastError;
 
-  try {
-    const message = await anthropic.messages.create({
-      model: modelId || 'claude-3-5-sonnet-20241022',
-      max_tokens: maxTokens,
-      temperature: temperature,
-      system: systemPrompt || undefined,
-      messages: [
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    });
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const message = await anthropic.messages.create({
+        model: modelId || 'claude-3-5-sonnet-20241022',
+        max_tokens: maxTokens,
+        temperature: temperature,
+        system: systemPrompt || undefined,
+        messages: [
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+      });
 
-    const text = message.content[0].text;
-    console.error(`[AI] Response length: ${text.length} chars`);
-    return text;
-  } catch (error) {
-    console.error('[AI] Anthropic error:', error);
-    throw new Error(`Anthropic API call failed: ${error.message}`);
+      const text = message.content[0].text;
+      console.error(`[AI] Response length: ${text.length} chars`);
+      return text;
+    } catch (error) {
+      lastError = error;
+
+      // Check if it's a rate limit error
+      if (error.status === 429) {
+        const retryAfter = error.headers?.['retry-after'] || (attempt * 20);
+        console.error(`[AI] Rate limit hit (attempt ${attempt}/${maxRetries}). Waiting ${retryAfter}s...`);
+
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+          continue;
+        }
+      }
+
+      console.error('[AI] Anthropic error:', error);
+      throw new Error(`Anthropic API call failed: ${error.message}`);
+    }
   }
+
+  throw new Error(`Anthropic API call failed after ${maxRetries} retries: ${lastError.message}`);
 }
 
 /**
